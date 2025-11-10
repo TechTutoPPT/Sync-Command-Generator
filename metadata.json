@@ -1,0 +1,5 @@
+{
+  "name": "Sync Command Generator",
+  "description": "An application to generate rsync (Linux) and robocopy (Windows) commands for file synchronization. Users can select their operating system, source/destination paths (local, Samba, SSH), and various sync options to create a customized command for backup and synchronization tasks.",
+  "requestFramePermissions": []
+}

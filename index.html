@@ -1,0 +1,534 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sync Command Generator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+    }
+    .font-fira-code {
+      font-family: 'Fira Code', monospace;
+    }
+    /* Simple tooltip style for group-hover */
+    .group:hover .group-hover\:opacity-100 {
+      opacity: 1;
+    }
+  </style>
+</head>
+<body class="bg-gray-900 text-gray-200">
+  <div id="root"></div>
+
+  <!-- Load React and ReactDOM using UMD builds for local file compatibility -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+
+  <!-- Babel for in-browser JSX/TSX transformation -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <!-- Main application script -->
+  <script type="text/babel" data-presets="react,typescript">
+// React and ReactDOM are now global variables, no imports needed.
+const { useState, useEffect, useCallback } = React;
+
+// All types, services, and components are defined in this single script block.
+
+// --- Enums and Interfaces (from types.ts) ---
+// Changed from enum to const object to fix ReferenceError with in-browser Babel
+const System = {
+  Windows: 'Windows',
+  Linux: 'Linux',
+};
+
+const PathType = {
+  Local: 'Local',
+  Samba: 'Samba',
+  SSH: 'SSH',
+};
+
+interface PathConfig {
+  type: PathType;
+  path: string;
+}
+
+interface SyncOptions {
+  mirror: boolean;
+  verbose: boolean;
+  dryRun: boolean;
+  exclusions: string;
+}
+
+// --- Command Generation Logic (from services/commandGenerator.ts) ---
+const generateRsyncCommand = (
+  source: PathConfig,
+  destination: PathConfig,
+  options: SyncOptions
+): { command: string; explanation: { flag: string; description: string }[] } => {
+  let command = ['rsync'];
+  const explanation: { flag: string; description: string }[] = [
+    { flag: 'rsync', description: 'The command-line utility for fast, incremental file transfer.' },
+  ];
+
+  let flags = '-a';
+  explanation.push({
+    flag: '-a',
+    description: '(archive mode) Preserves permissions, ownership, timestamps, etc.',
+  });
+
+  if (options.verbose) {
+    flags += 'v';
+    explanation.push({ flag: '-v', description: '(verbose) Increases the amount of information during transfer.' });
+  }
+
+  flags += 'h';
+  explanation.push({ flag: '-h', description: '(human-readable) Outputs numbers in a human-readable format.' });
+  command.push(flags);
+  
+  command.push('--progress');
+  explanation.push({ flag: '--progress', description: 'Shows a progress bar for each file transfer.' });
+
+  if (options.mirror) {
+    command.push('--delete');
+    explanation.push({ flag: '--delete', description: 'Deletes extraneous files from the destination directory.' });
+  }
+
+  if (options.dryRun) {
+    command.push('--dry-run');
+    explanation.push({ flag: '--dry-run', description: 'Performs a trial run with no changes made.' });
+  }
+
+  const exclusions = options.exclusions.split('\n').filter(ex => ex.trim() !== '');
+  exclusions.forEach(ex => {
+    command.push(`--exclude='${ex.trim()}'`);
+  });
+  if (exclusions.length > 0) {
+    explanation.push({ flag: '--exclude', description: 'Excludes files and directories matching a pattern.' });
+  }
+
+  let sourcePath = source.path.trim() || '<source_directory>';
+  if (source.type === PathType.Local && !sourcePath.endsWith('/') && sourcePath !== '<source_directory>') {
+    sourcePath += '/';
+  }
+
+  command.push(sourcePath);
+  command.push(destination.path.trim() || '<destination_directory>');
+
+  return { command: command.join(' '), explanation };
+};
+
+const generateRobocopyCommand = (
+  source: PathConfig,
+  destination: PathConfig,
+  options: SyncOptions
+): { command: string; explanation: { flag: string; description: string }[] } => {
+  let command = ['robocopy'];
+   const explanation: { flag: string; description: string }[] = [
+    { flag: 'robocopy', description: 'The Robust File Copy command-line utility for Windows.' },
+  ];
+
+  command.push(source.path.trim() || '"<SOURCE>"');
+  command.push(destination.path.trim() || '"<DESTINATION>"');
+  
+  if (options.mirror) {
+    command.push('/mir');
+    explanation.push({
+      flag: '/mir',
+      description: 'Mirrors a directory tree. Deletes destination files/dirs that no longer exist in source.',
+    });
+  } else {
+    command.push('/e');
+    explanation.push({ flag: '/e', description: 'Copies subdirectories, including empty ones (additive mode).' });
+  }
+
+  if (options.verbose) {
+    command.push('/v');
+    explanation.push({ flag: '/v', description: 'Produces verbose output, showing skipped files.' });
+  }
+
+  const exclusions = options.exclusions.split('\n').filter(ex => ex.trim() !== '');
+  if (exclusions.length > 0) {
+    const dirs = exclusions.filter(ex => !ex.includes('.') && !ex.includes('*')).map(d => `"${d.trim()}"`);
+    const files = exclusions.filter(ex => ex.includes('.') || ex.includes('*')).map(f => `"${f.trim()}"`);
+    
+    if (dirs.length > 0) {
+      command.push('/xd', ...dirs);
+      explanation.push({ flag: '/xd', description: 'Excludes specified directories.' });
+    }
+    if (files.length > 0) {
+      command.push('/xf', ...files);
+      explanation.push({ flag: '/xf', description: 'Excludes specified files.' });
+    }
+  }
+
+  if (options.dryRun) {
+    command.push('/l');
+    explanation.push({ flag: '/l', description: '(list-only) Performs a trial run with no changes made.' });
+  }
+
+  return { command: command.join(' '), explanation };
+};
+
+const generateCommand = (
+  system: System,
+  source: PathConfig,
+  destination: PathConfig,
+  options: SyncOptions
+): { command: string; explanation: { flag: string; description: string }[] } => {
+  if (system === System.Linux) {
+    return generateRsyncCommand(source, destination, options);
+  }
+  return generateRobocopyCommand(source, destination, options);
+};
+
+
+// --- Component: SystemSelector (from components/SystemSelector.tsx) ---
+const SystemSelector = ({ system, setSystem }) => {
+  return (
+    <div className="p-6 bg-gray-800 rounded-lg">
+      <h2 className="text-lg font-semibold text-white mb-4">1. Select Operating System</h2>
+      <div className="flex space-x-4">
+        {Object.values(System).map((sys) => (
+          <button
+            key={sys}
+            onClick={() => setSystem(sys)}
+            className={`flex-1 py-3 px-4 rounded-md text-center font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-blue-500 ${
+              system === sys
+                ? 'bg-blue-600 text-white shadow-lg'
+                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+            }`}
+          >
+            {sys}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// --- Component: PathInput (from components/PathInput.tsx) ---
+const PathInput = ({ label, id, pathConfig, setPathConfig, system }) => {
+  const isSshDisabled = system === System.Windows;
+  
+  const handleTypeChange = (e) => {
+    setPathConfig({ ...pathConfig, type: e.target.value });
+  };
+  
+  const handlePathChange = (e) => {
+    setPathConfig({ ...pathConfig, path: e.target.value });
+  };
+
+  const getPlaceholder = () => {
+    if (system === System.Windows) {
+        switch(pathConfig.type) {
+            case PathType.Local: return 'C:\\Users\\YourUser\\Documents';
+            case PathType.Samba: return '\\\\Server\\Share\\Folder';
+            default: return '';
+        }
+    } else { // Linux
+        switch(pathConfig.type) {
+            case PathType.Local: return '/home/user/data/';
+            case PathType.Samba: return '/mnt/samba_share/';
+            case PathType.SSH: return 'user@hostname:/remote/path/';
+        }
+    }
+  }
+
+  const showSambaNote = system === System.Linux && pathConfig.type === PathType.Samba;
+
+  return (
+    <div>
+      <label htmlFor={id} className="block text-sm font-medium text-gray-300 mb-2">
+        {label}
+      </label>
+      <div className="flex rounded-md shadow-sm">
+        <select
+          value={pathConfig.type}
+          onChange={handleTypeChange}
+          className="block w-1/3 rounded-l-md border-gray-600 bg-gray-700 text-white focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+        >
+          <option value={PathType.Local}>Local</option>
+          <option value={PathType.Samba}>Samba</option>
+          <option value={PathType.SSH} disabled={isSshDisabled} title={isSshDisabled ? "SSH is not natively supported by Robocopy" : ""}>
+            SSH {isSshDisabled && '(Linux only)'}
+          </option>
+        </select>
+        <input
+          type="text"
+          id={id}
+          value={pathConfig.path}
+          onChange={handlePathChange}
+          className="flex-1 block w-full min-w-0 rounded-none rounded-r-md border-gray-600 bg-gray-900 text-gray-200 placeholder-gray-500 focus:ring-blue-500 focus:border-blue-500 sm:text-sm font-fira-code"
+          placeholder={getPlaceholder()}
+        />
+      </div>
+      {showSambaNote && (
+        <p className="mt-2 text-xs text-gray-400">
+          Note: For Linux, the Samba share must be mounted to a local directory first. Enter the local mount path.
+        </p>
+      )}
+    </div>
+  );
+};
+
+
+// --- Component: OptionsSelector (from components/OptionsSelector.tsx) ---
+const InfoIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 inline-block ml-1 text-gray-400" viewBox="0 0 20 20" fill="currentColor">
+        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+    </svg>
+);
+
+const Tooltip = ({ text, children }) => {
+    return (
+        <div className="relative flex items-center group">
+            {children}
+            <div className="absolute bottom-full mb-2 w-64 p-2 text-sm text-white bg-gray-700 rounded-md shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-300 z-10 pointer-events-none">
+                {text}
+            </div>
+        </div>
+    );
+};
+
+const Checkbox = ({id, checked, onChange, label, tooltip}) => {
+    return (
+        <div className="relative flex items-start">
+            <div className="flex items-center h-5">
+                <input
+                    id={id}
+                    type="checkbox"
+                    checked={checked}
+                    onChange={onChange}
+                    className="focus:ring-blue-500 h-4 w-4 text-blue-600 bg-gray-700 border-gray-600 rounded"
+                />
+            </div>
+            <div className="ml-3 text-sm">
+                <label htmlFor={id} className="font-medium text-gray-300">{label}</label>
+                <Tooltip text={tooltip}>
+                    <InfoIcon />
+                </Tooltip>
+            </div>
+        </div>
+    );
+};
+
+const OptionsSelector = ({ options, setOptions, system }) => {
+  const handleCheckboxChange = (e) => {
+    setOptions({ ...options, [e.target.id]: e.target.checked });
+  };
+
+  const handleExclusionsChange = (e) => {
+    setOptions({ ...options, exclusions: e.target.value });
+  };
+  
+  const mirrorTooltip = system === System.Windows
+    ? "Equivalent to Robocopy's /mir flag. Deletes files and directories at the destination that no longer exist at the source."
+    : "Equivalent to rsync's --delete flag. Deletes files at the destination that no longer exist at the source.";
+
+  const exclusionPlaceholder = system === System.Windows
+    ? "Enter one exclusion per line.\nExample directories: Temp, 'My Docs'\nExample files: *.log, file.tmp"
+    : "Enter one exclusion per line.\nExample: node_modules/, .git/, *.bak";
+
+  return (
+    <div className="p-6 bg-gray-800 rounded-lg">
+      <h2 className="text-lg font-semibold text-white mb-4">3. Configure Options</h2>
+      <div className="space-y-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <Checkbox 
+            id="mirror"
+            checked={options.mirror}
+            onChange={handleCheckboxChange}
+            label="Mirror Sync"
+            tooltip={mirrorTooltip}
+          />
+          <Checkbox 
+            id="verbose"
+            checked={options.verbose}
+            onChange={handleCheckboxChange}
+            label="Verbose Output"
+            tooltip="Show detailed information during the process."
+          />
+          <Checkbox 
+            id="dryRun"
+            checked={options.dryRun}
+            onChange={handleCheckboxChange}
+            label="Dry Run"
+            tooltip="Simulate the command without making any actual changes to the files."
+          />
+        </div>
+        <div>
+          <label htmlFor="exclusions" className="block text-sm font-medium text-gray-300 mb-2">
+            Exclusions (one per line)
+          </label>
+          <textarea
+            id="exclusions"
+            rows={4}
+            value={options.exclusions}
+            onChange={handleExclusionsChange}
+            className="block w-full rounded-md border-gray-600 bg-gray-900 text-gray-200 placeholder-gray-500 focus:ring-blue-500 focus:border-blue-500 sm:text-sm font-fira-code"
+            placeholder={exclusionPlaceholder}
+          ></textarea>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
+// --- Component: CommandOutput (from components/CommandOutput.tsx) ---
+const CopyIcon = ({ className }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+    </svg>
+);
+
+const CheckIcon = ({ className }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+    </svg>
+);
+
+const CommandOutput = ({ command, explanation }) => {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(() => {
+    if (!navigator.clipboard) {
+      alert('Copy to clipboard is not available in this browser environment. Please copy the text manually.');
+      return;
+    }
+    navigator.clipboard.writeText(command).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(err => {
+      console.error('Failed to copy command: ', err);
+      alert('Could not copy command to clipboard.');
+    });
+  }, [command]);
+
+  return (
+    <div className="p-6 bg-gray-800 rounded-lg">
+      <h2 className="text-lg font-semibold text-white mb-4">4. Generated Command</h2>
+      <div className="relative">
+        <pre className="p-4 pr-12 bg-black rounded-md text-green-400 font-fira-code overflow-x-auto">
+          <code>{command}</code>
+        </pre>
+        <button
+          onClick={handleCopy}
+          className="absolute top-3 right-3 p-2 rounded-md bg-gray-700 text-gray-300 hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-black focus:ring-blue-500 transition-all duration-200"
+          aria-label="Copy command"
+        >
+          {copied ? <CheckIcon className="h-5 w-5 text-green-400" /> : <CopyIcon className="h-5 w-5" />}
+        </button>
+      </div>
+      <div className="mt-4">
+        <h3 className="text-md font-semibold text-white mb-2">Command Breakdown</h3>
+        <ul className="space-y-2 text-sm">
+            {explanation.map(({ flag, description }) => (
+                <li key={flag} className="flex items-start">
+                    <code className="font-fira-code text-blue-400 bg-gray-700 px-2 py-1 rounded-md w-28 text-right mr-4 shrink-0">{flag}</code>
+                    <span className="text-gray-400 mt-1">{description}</span>
+                </li>
+            ))}
+        </ul>
+      </div>
+    </div>
+  );
+};
+
+
+// --- Main App Component (from App.tsx) ---
+const App = () => {
+  const [system, setSystem] = useState(System.Windows);
+  const [source, setSource] = useState({ type: PathType.Local, path: '' });
+  const [destination, setDestination] = useState({ type: PathType.Local, path: '' });
+  const [options, setOptions] = useState({
+    mirror: true,
+    verbose: true,
+    dryRun: false,
+    exclusions: '',
+  });
+
+  const [generated, setGenerated] = useState({
+    command: '',
+    explanation: [],
+  });
+
+  useEffect(() => {
+    if (system === System.Windows) {
+      if (source.type === PathType.SSH) {
+        setSource({ ...source, type: PathType.Local });
+      }
+      if (destination.type === PathType.SSH) {
+        setDestination({ ...destination, type: PathType.Local });
+      }
+    }
+  }, [system, source.type, destination.type]);
+
+  useEffect(() => {
+    const { command, explanation } = generateCommand(system, source, destination, options);
+    setGenerated({ command, explanation });
+  }, [system, source, destination, options]);
+
+  return (
+    <div className="min-h-screen bg-gray-900 p-4 sm:p-6 lg:p-8">
+      <div className="max-w-4xl mx-auto">
+        <header className="text-center mb-8">
+          <h1 className="text-4xl font-bold text-white">Sync Command Generator</h1>
+          <p className="mt-2 text-lg text-gray-400">
+            Generate <code className="font-fira-code text-green-400">rsync</code> and <code className="font-fira-code text-green-400">robocopy</code> commands with ease.
+          </p>
+        </header>
+
+        <main className="space-y-6">
+          <SystemSelector system={system} setSystem={setSystem} />
+
+          <div className="p-6 bg-gray-800 rounded-lg">
+            <h2 className="text-lg font-semibold text-white mb-4">2. Define Source & Destination</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <PathInput 
+                    label="Source Path"
+                    id="source"
+                    pathConfig={source}
+                    setPathConfig={setSource}
+                    system={system}
+                />
+                <PathInput 
+                    label="Destination Path"
+                    id="destination"
+                    pathConfig={destination}
+                    setPathConfig={setDestination}
+                    system={system}
+                />
+            </div>
+          </div>
+          
+          <OptionsSelector options={options} setOptions={setOptions} system={system} />
+
+          <CommandOutput command={generated.command} explanation={generated.explanation} />
+        </main>
+
+        <footer className="text-center mt-8 text-gray-500 text-sm">
+          <p>Built for developers and system administrators.</p>
+        </footer>
+      </div>
+    </div>
+  );
+};
+
+
+// --- Application Entry Point (from index.tsx) ---
+const rootElement = document.getElementById('root');
+const root = ReactDOM.createRoot(rootElement);
+root.render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+  </script>
+</body>
+</html>
